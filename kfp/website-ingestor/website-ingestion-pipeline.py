@@ -229,7 +229,7 @@ def process_and_store(input_artifact: Input[Artifact], url: str, index_name: str
 
 @dsl.pipeline(name="Document Ingestion Pipeline")
 def website_ingestion_pipeline(url: str, index_name: str):
-    #url = "https://www.redhat.com/en/topics/containers/red-hat-openshift-okd"
+    url = "https://www.argentina.gob.ar/normativa/nacional/ley-24449-818/actualizacion"
     scrape_website_task=scrape_website(url=url)
     process_and_store_task=process_and_store(url=url,index_name=index_name, input_artifact=scrape_website_task.outputs["html_artifact"])
 
