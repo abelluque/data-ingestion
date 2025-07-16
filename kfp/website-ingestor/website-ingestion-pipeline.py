@@ -246,9 +246,12 @@ def website_ingestion_pipeline(url: str, index_name: str):
 
 if __name__ == "__main__":
     KUBEFLOW_ENDPOINT = os.getenv("KUBEFLOW_ENDPOINT")
+    
     #WEBSITE_URL = os.getenv("WEBSITE_URL")
     WEBSITE_URL = "https://www.argentina.gob.ar/normativa/nacional/ley-24449-818/actualizacion"
-    VECTORDB_INDEX = os.getenv("VECTORDB_INDEX").lower()
+    #VECTORDB_INDEX = os.getenv("VECTORDB_INDEX").lower()
+    VECTORDB_INDEX = "traffic-regulations"
+    
     print(f"Connecting to kfp: {KUBEFLOW_ENDPOINT}")
     sa_token_path = "/run/secrets/kubernetes.io/serviceaccount/token" # noqa: S105
     if os.path.isfile(sa_token_path):
