@@ -188,7 +188,7 @@ def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
 def siniestros_ingestion_pipeline():
     # Define la ruta al archivo CSV *dentro* del contenedor Docker
     # Esta ruta debe coincidir con donde el Dockerfile copia el CSV.
-    csv_internal_path = "/app/data/siniestros.csv"
+    csv_internal_path = "/data/cleaned_data_processed.csv"
 
     # Paso 1: Ingestar datos desde CSV
     ingest_csv_task = ingest_csv_data(csv_file_path=csv_internal_path)
