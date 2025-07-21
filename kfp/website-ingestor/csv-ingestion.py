@@ -6,38 +6,67 @@ from kfp import dsl, kubernetes
 from kfp.dsl import Artifact, Input, Output
 
 
-# Definición del componente ingest_csv_data (copiado aquí para un ejemplo autocontenido)
+# Definición del componente ingest_csv_data para MinIO
 @dsl.component(
     base_image="python:3.11",
-    packages_to_install=["pandas==2.2.2"],
+    packages_to_install=["pandas==2.2.2", "boto3==1.34.128"], # Añadir boto3
 )
-def ingest_csv_data(csv_file_path: str, output_json_artifact: Output[Artifact]):
+def ingest_csv_data(
+    s3_bucket: str,
+    s3_key: str,
+    output_json_artifact: Output[Artifact],
+    minio_endpoint: str, # Parámetro para la URL del endpoint de MinIO
+    minio_access_key: str, # Parámetro para la clave de acceso de MinIO
+    minio_secret_key: str # Parámetro para la clave secreta de MinIO
+):
     """
-    Lee un archivo CSV desde una ruta especificada dentro del contenedor,
-    selecciona las columnas relevantes y guarda los datos como un artefacto JSON.
+    Descarga un archivo CSV desde S3 (o MinIO), selecciona las columnas relevantes y
+    guarda los datos como un artefacto JSON.
 
     Args:
-        csv_file_path (str): La ruta al archivo CSV dentro del contenedor.
+        s3_bucket (str): El nombre del bucket S3.
+        s3_key (str): La clave (ruta) del archivo CSV dentro del bucket S3.
         output_json_artifact (Output[Artifact]): La ruta donde se guardará el JSON de datos procesados.
+        minio_endpoint (str): La URL del endpoint de tu instancia de MinIO (ej. 'http://your-minio-endpoint:9000').
+        minio_access_key (str): La clave de acceso para autenticarse con MinIO.
+        minio_secret_key (str): La clave secreta para autenticarse con MinIO.
     """
     import pandas as pd
     import json
     import os
     import logging
+    import boto3
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Intentando leer CSV desde: {csv_file_path}")
+    # Crear un directorio temporal para el archivo descargado
+    temp_dir = "/tmp/s3_data"
+    os.makedirs(temp_dir, exist_ok=True)
+    local_csv_path = os.path.join(temp_dir, os.path.basename(s3_key))
 
-    if not os.path.exists(csv_file_path):
-        logger.error(f"Archivo no encontrado: {csv_file_path}")
-        raise FileNotFoundError(f"El archivo CSV no se encontró en: {csv_file_path}")
+    logger.info(f"Intentando descargar {s3_key} de S3 bucket {s3_bucket} desde MinIO endpoint {minio_endpoint} a {local_csv_path}")
 
     try:
-        df = pd.read_csv(csv_file_path)
+        # Configura el cliente boto3 para MinIO
+        s3 = boto3.client(
+            's3',
+            endpoint_url=minio_endpoint,
+            aws_access_key_id=minio_access_key,
+            aws_secret_access_key=minio_secret_key,
+            verify=False # Usar con precaución. Si usas HTTPS con certificados auto-firmados o no válidos.
+                         # En producción, se recomienda configurar los certificados correctamente.
+        )
+        s3.download_file(s3_bucket, s3_key, local_csv_path)
+        logger.info(f"Archivo descargado exitosamente de MinIO a: {local_csv_path}")
+    except Exception as e:
+        logger.error(f"Error al descargar el archivo de MinIO: {e}")
+        raise RuntimeError(f"Error al descargar el archivo de MinIO: {e}")
+
+    try:
+        df = pd.read_csv(local_csv_path)
         logger.info(f"CSV leído exitosamente. Dimensiones del DataFrame: {df.shape}")
     except Exception as e:
-        logger.error(f"Error al leer el archivo CSV {csv_file_path}: {e}")
+        logger.error(f"Error al leer el archivo CSV local {local_csv_path}: {e}")
         raise RuntimeError(f"Error al leer el archivo CSV: {e}")
 
     relevant_columns = ["forma_ocurrencia", "etiqueta"]
@@ -60,7 +89,7 @@ def ingest_csv_data(csv_file_path: str, output_json_artifact: Output[Artifact]):
     logger.info(f"Datos procesados guardados en: {output_json_artifact.path}")
 
 
-# Definición del componente process_and_store (modificado)
+# Definición del componente process_and_store (sin cambios significativos, solo el origen del input)
 @dsl.component(
     base_image="image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/minimal-gpu:2024.2",
     packages_to_install=[
@@ -71,7 +100,7 @@ def ingest_csv_data(csv_file_path: str, output_json_artifact: Output[Artifact]):
         "elastic-transport==8.15.1",
         "elasticsearch==8.16.0",
         "langchain-elasticsearch==0.3.0",
-        "pandas==2.2.2", # Mantener pandas por si acaso, aunque ingest_csv_data ya lo usa.
+        "pandas==2.2.2",
     ],
 )
 def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
@@ -116,8 +145,8 @@ def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
                         "properties": {
                             "page_content": {"type": "text"},
                             "metadata": {"type": "object"},
-                            "forma_ocurrencia": {"type": "keyword"}, # Mapeo específico para forma_ocurrencia
-                            "etiqueta": {"type": "keyword"}          # Mapeo específico para etiqueta
+                            "forma_ocurrencia": {"type": "keyword"},
+                            "etiqueta": {"type": "keyword"}
                         }
                     }
                 }
@@ -174,7 +203,7 @@ def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
         metadata = {
             "forma_ocurrencia": row.get("forma_ocurrencia"),
             "etiqueta": row.get("etiqueta"),
-            "source": "siniestros.csv" # Añadir metadato de origen
+            "source": "minio_cleaned_data_processed.csv" # Actualizar metadato de origen para MinIO
         }
         documents_for_es.append(Document(page_content=page_content, metadata=metadata))
 
@@ -184,18 +213,24 @@ def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
     logger.info(f"Procesamiento de datos CSV finalizado.")
 
 
-@dsl.pipeline(name="Pipeline de Ingestión de Siniestros desde CSV")
-def siniestros_ingestion_pipeline():
-    # Define la ruta al archivo CSV *dentro* del contenedor Docker
-    # Esta ruta debe coincidir con donde el Dockerfile copia el CSV.
-    csv_internal_path = "/data/cleaned_data_processed.csv"
-
-    # Paso 1: Ingestar datos desde CSV
-    ingest_csv_task = ingest_csv_data(csv_file_path=csv_internal_path)
+@dsl.pipeline(name="Pipeline de Ingestión de Siniestros desde MinIO")
+def siniestros_ingestion_pipeline_minio(
+    s3_bucket: str = "your-minio-bucket-name", # Parámetro del bucket S3
+    s3_key: str = "path/to/cleaned_data_processed.csv", # Parámetro de la clave S3
+    minio_endpoint: str = "http://your-minio-service:9000", # Valor por defecto para MinIO
+    minio_access_key: str = "minioadmin", # Valor por defecto, ¡reemplazar con un secreto!
+    minio_secret_key: str = "minioadmin" # Valor por defecto, ¡reemplazar con un secreto!
+):
+    # Paso 1: Ingestar datos desde MinIO
+    ingest_csv_task = ingest_csv_data(
+        s3_bucket=s3_bucket,
+        s3_key=s3_key,
+        minio_endpoint=minio_endpoint,
+        minio_access_key=minio_access_key,
+        minio_secret_key=minio_secret_key
+    )
 
     # Paso 2: Procesar y almacenar los datos ingestados
-    # Pasar el artefacto JSON de salida de ingest_csv_data a process_and_store
-    # El nombre del índice se establece en "siniestros" según lo solicitado
     process_and_store_task = process_and_store(
         input_json_artifact=ingest_csv_task.outputs["output_json_artifact"],
         index_name="siniestros" # Nombre del índice fijo
@@ -238,12 +273,14 @@ if __name__ == "__main__":
         ssl_ca_cert=None,
     )
     result = client.create_run_from_pipeline_func(
-        siniestros_ingestion_pipeline, # Usar el nuevo nombre de la función del pipeline
-        experiment_name="siniestros_ingestion_from_csv", # Nombre del experimento actualizado
+        siniestros_ingestion_pipeline_minio, # Usar el nuevo nombre de la función del pipeline
+        experiment_name="siniestros_ingestion_from_minio", # Nombre del experimento actualizado
         enable_caching=False,
-        arguments={} # Ya no se necesitan argumentos para la función del pipeline en sí
+        arguments={
+            "s3_bucket": "siniestros", 
+            "s3_key": "cleaned_data_processed.csv", 
+            "minio_endpoint": "https://minio-api-seguros-rivadavia.apps.cluster-sfw6q.sfw6q.sandbox29.opentlc.com", 
+            "minio_access_key": "minio", 
+            "minio_secret_key": "minio123" 
+        }
     )
-
-    # Para compilar el pipeline localmente (descomentar si es necesario):
-    # from kfp import compiler
-    # compiler.Compiler().compile(siniestros_ingestion_pipeline, 'siniestros_pipeline.yaml')
