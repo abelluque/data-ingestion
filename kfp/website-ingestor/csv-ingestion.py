@@ -180,6 +180,7 @@ def process_and_store(input_json_artifact: Input[Artifact], index_name: str):
         except Exception as e:
             logger.error(f"Error durante la ingesta para el índice {index_name}: {e}")
 
+
     """Procesa el contenido CSV y lo añade al almacén de Elasticsearch."""
     logger.info(f"Iniciando procesamiento para datos CSV.")
     es_client = get_es_client()
