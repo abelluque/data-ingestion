@@ -241,7 +241,7 @@ def website_ingestion_pipeline(url: str, index_name: str):
         secret_name="elasticsearch-es-elastic-user",
         secret_key_to_env={"elastic": "ES_PASS"},
     )
-    process_and_store_task.set_env_variable("ES_HOST", "elasticsearch-es-es-http.composer-ai-apps.svc.cluster.local:9200")
+    process_and_store_task.set_env_variable("ES_HOST", "http://elasticsearch-es-http.composer-ai-apps.svc.cluster.local:9200")
     process_and_store_task.set_env_variable("ES_USER", "elastic")
 
 if __name__ == "__main__":
